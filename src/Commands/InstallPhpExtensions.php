@@ -8,6 +8,7 @@ use Laravel\Prompts\Progress;
 use function Laravel\Prompts\multiselect;
 use Illuminate\Support\Facades\Process;
 use RuntimeException;
+use ZipArchive;
 
 class InstallPhpExtensions extends Command
 {
@@ -217,6 +218,21 @@ class InstallPhpExtensions extends Command
             $this->info('Build completed successfully!');
             $this->info("Your custom PHP binary with selected extensions is available at: {$spcPath}" .
                 ($os === 'Windows' ? "\\buildroot\\bin\\{$binaryPath}" : "/buildroot/bin/{$binaryPath}"));
+
+            // Create a zip file for the built PHP binary
+            $zipFileName = "php-{$phpVersion}.zip";
+            $zipFilePath = "vendor/nativephp/php-bin/bin/{$os}/x64/{$zipFileName}";
+
+            $zip = new ZipArchive();
+            if ($zip->open($zipFilePath, ZipArchive::CREATE | ZipArchive::OVERWRITE) === true) {
+                $binaryFullPath = $spcPath . ($os === 'Windows' ? "\\buildroot\\bin\\{$binaryPath}" : "/buildroot/bin/{$binaryPath}");
+                $zip->addFile($binaryFullPath, $binaryPath);
+                $zip->close();
+
+                $this->info("PHP binary has been zipped as {$zipFileName} and placed at {$zipFilePath}");
+            } else {
+                $this->error("Failed to create zip file at {$zipFilePath}");
+            }
 
             if ($sapi === 'micro') {
                 $this->info('To create a self-contained executable, use:');
