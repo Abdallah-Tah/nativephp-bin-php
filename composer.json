@@ -44,7 +44,6 @@
     "require": {
         "php": ">=8.1",
         "laravel/framework": ">=10.0",
-        "nativephp/nativephp": "^1.0",
         "laravel/prompts": "^0.1.13",
         "illuminate/process": "^10.0",
         "symfony/process": "^6.0|^7.0"
@@ -67,5 +66,11 @@
         "test-coverage": "vendor/bin/phpunit --coverage-html coverage",
         "format": "vendor/bin/pint",
         "analyse": "vendor/bin/phpstan analyse"
-    }
+    },
+    "repositories": [
+        {
+            "type": "vcs",
+            "url": "https://github.com/Abdallah-Tah/nativephp-bin-php"
+        }
+    ]
 }
