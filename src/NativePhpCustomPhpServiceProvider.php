@@ -17,6 +17,11 @@ class NativePhpCustomPhpServiceProvider extends ServiceProvider
             $this->commands([
                 Commands\InstallPhpExtensions::class,
             ]);
+
+            // Publish configuration file
+            $this->publishes([
+                __DIR__ . '/../config/nativephp-custom-php.php' => config_path('nativephp-custom-php.php'),
+            ], 'config');
         }
     }
 }
