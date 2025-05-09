@@ -2,26 +2,34 @@
 
 namespace Amohamed\NativePhpCustomPhp;
 
+use Amohamed\NativePhpCustomPhp\Commands\InstallPhpExtensions;
 use Illuminate\Support\ServiceProvider;
 
 class NativePhpCustomPhpServiceProvider extends ServiceProvider
 {
-    public function register(): void
+    public function register()
     {
-        //
-    }
+        $this->mergeConfigFrom(
+            __DIR__ . '/config/nativephp-custom-php.php',
+            'nativephp-custom-php'
+        );
 
-    public function boot(): void
-    {
         if ($this->app->runningInConsole()) {
             $this->commands([
-                Commands\InstallPhpExtensions::class,
+                InstallPhpExtensions::class,
             ]);
 
-            // Publish configuration file
             $this->publishes([
-                __DIR__ . '/../config/nativephp-custom-php.php' => config_path('nativephp-custom-php.php'),
-            ], 'config');
+                __DIR__ . '/config/nativephp-custom-php.php' => config_path('nativephp-custom-php.php'),
+            ], 'nativephp-custom-php-config');
+        }
+    }
+
+    public function boot()
+    {
+        // Make sure the config directory exists
+        if (!is_dir(config_path())) {
+            mkdir(config_path(), 0755, true);
         }
     }
 }
