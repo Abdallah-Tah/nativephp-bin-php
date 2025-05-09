@@ -27,7 +27,10 @@
     "autoload": {
         "psr-4": {
             "Amohamed\\NativePhpCustomPhp\\": "src/"
-        }
+        },
+        "files": [
+            "src/config/nativephp-custom-php.php"
+        ]
     },
     "autoload-dev": {
         "psr-4": {
