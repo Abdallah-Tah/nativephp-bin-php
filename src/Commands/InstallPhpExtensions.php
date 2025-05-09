@@ -20,60 +20,33 @@ class InstallPhpExtensions extends Command
     protected $description = 'Install PHP extensions for NativePHP using static-php-cli';
 
     protected $availableExtensions = [
-        'bcmath',
-        'bz2',
-        'ctype',
-        'curl',
-        'dom',
-        'fileinfo',
-        'filter',
-        'gd',
-        'iconv',
-        'mbstring',
-        'opcache',
-        'openssl',
-        'pdo',
-        'pdo_sqlite',
-        'pdo_mysql',
-        'pdo_pgsql',
-        'phar',
-        'session',
-        'simplexml',
-        'sockets',
-        'sqlite3',
-        'tokenizer',
-        'xml',
-        'zip',
-        'zlib',
-        'sqlsrv',
-        'pdo_sqlsrv'
+        'bcmath', 'bz2', 'ctype', 'curl', 'dom', 'fileinfo', 'filter',
+        'gd', 'iconv', 'mbstring', 'opcache', 'openssl', 'pdo',
+        'pdo_sqlite', 'pdo_mysql', 'pdo_pgsql', 'phar', 'session',
+        'simplexml', 'sockets', 'sqlite3', 'tokenizer', 'xml',
+        'zip', 'zlib', 'sqlsrv', 'pdo_sqlsrv'
     ];
 
     protected $requiredLibraries = [
-        'bzip2',
-        'zlib',
-        'openssl',
-        'libssh2',
-        'libiconv-win',
-        'libxml2',
-        'nghttp2',
-        'curl',
-        'libpng',
-        'sqlite',
-        'xz',
-        'libzip'
+        'bzip2', 'zlib', 'openssl', 'libssh2', 'libiconv-win',
+        'libxml2', 'nghttp2', 'curl', 'libpng', 'sqlite', 'xz', 'libzip'
     ];
 
-    protected $defaultPath = 'D:\custom-static-php\static-php-cli';
+    protected $defaultPath;
+
+    public function __construct()
+    {
+        parent::__construct();
+        $this->defaultPath = base_path('nativephp-php-custom');
+    }
 
     protected function detectOS(): string
     {
-        $osFamily = PHP_OS_FAMILY;
-        return match ($osFamily) {
+        return match (PHP_OS_FAMILY) {
             'Windows' => 'Windows',
-            'Darwin' => 'macOS',
-            'Linux' => 'Linux',
-            default => throw new RuntimeException("Unsupported operating system: {$osFamily}")
+            'Darwin'  => 'macOS',
+            'Linux'   => 'Linux',
+            default   => throw new RuntimeException("Unsupported OS: " . PHP_OS_FAMILY),
         };
     }
 
@@ -82,8 +55,13 @@ class InstallPhpExtensions extends Command
         $this->validateEnvironment();
 
         $spcPath = $this->option('path') ?: $this->defaultPath;
-        if (!file_exists($spcPath)) {
-            throw new RuntimeException("static-php-cli not found at {$spcPath}. Please install it first from https://github.com/crazywhalecc/static-php-cli");
+
+        if (! file_exists($spcPath)) {
+            $this->info("nativephp-php-custom not found. Cloning into {$spcPath}...");
+            $result = Process::run("git clone https://github.com/Abdallah-Tah/nativephp-php-custom.git \"{$spcPath}\"");
+            if (! $result->successful()) {
+                throw new RuntimeException("Failed to clone nativephp-php-custom: " . $result->errorOutput());
+            }
         }
 
         $os = $this->detectOS();
@@ -93,65 +71,53 @@ class InstallPhpExtensions extends Command
             $this->checkWindowsRequirements();
         }
 
-        // Download required libraries first
         $this->downloadRequiredLibraries($spcPath);
 
         $this->info('Available PHP extensions:');
-        foreach ($this->availableExtensions as $index => $extension) {
-            $this->line("[{$index}] {$extension}");
+        foreach ($this->availableExtensions as $i => $ext) {
+            $this->line("[{$i}] {$ext}");
         }
 
-        $selectedIndexes = $this->ask('Enter the numbers of the extensions you want to install, separated by commas');
-
-        if (empty($selectedIndexes)) {
+        $indexes = $this->ask('Enter the numbers of the extensions to install, separated by commas');
+        if (! $indexes) {
             $this->warn('No extensions selected.');
             return self::SUCCESS;
         }
 
-        $selectedIndexes = array_map('trim', explode(',', $selectedIndexes));
-        $extensions = array_intersect_key($this->availableExtensions, array_flip($selectedIndexes));
-
-        if (empty($extensions)) {
+        $selected = array_intersect_key($this->availableExtensions, array_flip(array_map('trim', explode(',', $indexes))));
+        if (! $selected) {
             $this->warn('No valid extensions selected.');
             return self::SUCCESS;
         }
 
-        return $this->buildPhp($extensions, $os, $spcPath);
+        return $this->buildPhp($selected, $os, $spcPath);
     }
 
     protected function downloadRequiredLibraries(string $spcPath): void
     {
         $this->info('Checking and downloading required libraries...');
-
-        foreach ($this->requiredLibraries as $library) {
-            $this->info("Checking library: {$library}");
-
-            // Try building to see if library exists
-            $process = Process::start("{$spcPath}\\bin\\spc build-library {$library}");
-
-            while ($process->running()) {
-                if ($process->latestOutput() && str_contains($process->latestOutput(), 'not downloaded or not locked')) {
-                    $this->warn("Library {$library} not found, downloading...");
-
-                    // Download the library
-                    $downloadProcess = Process::start("{$spcPath}\\bin\\spc download {$library}");
-
-                    while ($downloadProcess->running()) {
-                        if ($downloadProcess->latestOutput()) {
-                            $this->line($downloadProcess->latestOutput());
+        foreach ($this->requiredLibraries as $lib) {
+            $this->info("Checking library: {$lib}");
+            $p = Process::start("{$spcPath}/bin/spc build-library {$lib}");
+            while ($p->running()) {
+                $out = $p->latestOutput();
+                if ($out && str_contains($out, 'not downloaded or not locked')) {
+                    $this->warn("Library {$lib} not found, downloading...");
+                    $d = Process::start("{$spcPath}/bin/spc download {$lib}");
+                    while ($d->running()) {
+                        if ($o = $d->latestOutput()) {
+                            $this->line($o);
                         }
                         sleep(1);
                     }
-
-                    if ($downloadProcess->status() === 0) {
-                        $this->info("Successfully downloaded {$library}");
+                    if ($d->successful()) {
+                        $this->info("Successfully downloaded {$lib}");
                     } else {
-                        $this->error("Failed to download {$library}. Error: " . $downloadProcess->errorOutput());
-                        if (!$this->confirm("Would you like to continue without {$library}?")) {
-                            throw new RuntimeException("Cannot continue without required library: {$library}");
+                        $this->error("Failed to download {$lib}: " . $d->errorOutput());
+                        if (! $this->confirm("Continue without {$lib}?")) {
+                            throw new RuntimeException("Cannot continue without {$lib}");
                         }
                     }
-
                     break;
                 }
                 sleep(1);
@@ -159,61 +125,41 @@ class InstallPhpExtensions extends Command
         }
     }
 
-    protected function buildPhp(array $extensions, string $os, string $spcPath): int
+    protected function buildPhp(array $exts, string $os, string $spcPath): int
     {
-        $extensionsString = implode(',', $extensions);
+        $list = implode(',', $exts);
         $sapi = $this->option('sapi');
-        $phpVersion = $this->option('php-version');
+        $ver  = $this->option('php-version');
 
-        $this->info("Building PHP {$phpVersion} with selected extensions using static-php-cli...");
-        $this->info('This may take several minutes...');
+        $this->info("Building PHP {$ver} with: {$list}...");
+        $cmd = ($os === 'Windows' ? "{$spcPath}\\bin\\spc" : "{$spcPath}/bin/spc")
+             . " build \"{$list}\" --build-{$sapi}"
+             . ($this->option('upx') ? ' --with-upx' : '')
+             . ($sapi === 'micro'        ? ' --with-micro' : '');
 
-        $command = $os === 'Windows'
-            ? "{$spcPath}\\bin\\spc"
-            : "{$spcPath}/bin/spc";
-
-        $command .= " build \"{$extensionsString}\" --build-{$sapi}";
-
-        if ($this->option('upx')) {
-            $command .= ' --with-upx';
-        }
-
-        if ($sapi === 'micro') {
-            $command .= ' --with-micro';
-        }
-
-        $this->comment('Running command: ' . $command);
-
-        $process = Process::start($command);
-        $currentLibrary = null;
-
-        while ($process->running()) {
-            $output = $process->latestOutput();
-            if ($output) {
-                $this->line($output);
-
-                // Check for library download/build issues
-                if (preg_match('/Building required lib \[(\w+)\]/', $output, $matches)) {
-                    $currentLibrary = $matches[1];
-                } elseif ($currentLibrary && str_contains($output, 'not downloaded or not locked')) {
-                    $this->warn("Library {$currentLibrary} missing, attempting to download...");
-
-                    // Try to download the missing library
-                    $downloadProcess = Process::start("{$spcPath}\\bin\\spc download {$currentLibrary}");
-                    while ($downloadProcess->running()) {
-                        if ($downloadProcess->latestOutput()) {
-                            $this->line($downloadProcess->latestOutput());
+        $this->comment("Running: {$cmd}");
+        $p = Process::start($cmd);
+        $current = null;
+        while ($p->running()) {
+            if ($o = $p->latestOutput()) {
+                $this->line($o);
+                if (preg_match('/Building required lib \[(\w+)\]/', $o, $m)) {
+                    $current = $m[1];
+                } elseif ($current && str_contains($o, 'not downloaded or not locked')) {
+                    $this->warn("Missing {$current}, downloading...");
+                    $d = Process::start("{$spcPath}/bin/spc download {$current}");
+                    while ($d->running()) {
+                        if ($o2 = $d->latestOutput()) {
+                            $this->line($o2);
                         }
                         sleep(1);
                     }
-
-                    if ($downloadProcess->status() === 0) {
-                        $this->info("Successfully downloaded {$currentLibrary}, continuing build...");
-                        // Restart the main build process
-                        $process = Process::start($command);
+                    if ($d->successful()) {
+                        $this->info("Downloaded {$current}, retrying build...");
+                        $p = Process::start($cmd);
                     } else {
-                        $this->error("Failed to download {$currentLibrary}. You may need to download it manually.");
-                        if (!$this->confirm("Would you like to continue anyway?")) {
+                        $this->error("Failed to download {$current}");
+                        if (! $this->confirm("Continue anyway?")) {
                             return self::FAILURE;
                         }
                     }
@@ -222,72 +168,58 @@ class InstallPhpExtensions extends Command
             sleep(1);
         }
 
-        if ($process->status() === 0) {
-            $binaryPath = $sapi === 'micro' ? 'micro.sfx' : ($os === 'Windows' ? 'php.exe' : 'php');
-            $this->info('Build completed successfully!');
-            $this->info("Your custom PHP binary with selected extensions is available at: {$spcPath}" .
-                ($os === 'Windows' ? "\\buildroot\\bin\\{$binaryPath}" : "/buildroot/bin/{$binaryPath}"));
+        if ($p->successful()) {
+            $bin = $sapi === 'micro' ? 'micro.sfx' : ($os === 'Windows' ? 'php.exe' : 'php');
+            $this->info('Build successful!');
+            $this->info("Binary at: {$spcPath}" . ($os === 'Windows' ? "\\buildroot\\bin\\{$bin}" : "/buildroot/bin/{$bin}"));
 
-            // Create a zip file for the built PHP binary
-            $zipFileName = "php-{$phpVersion}.zip";
-            $zipFilePath = "vendor/nativephp/php-bin/bin/{$os}/x64/{$zipFileName}";
-
+            $zipName = "php-{$ver}.zip";
+            $zipPath = "vendor/nativephp/php-bin/bin/{$os}/x64/{$zipName}";
             $zip = new ZipArchive();
-            if ($zip->open($zipFilePath, ZipArchive::CREATE | ZipArchive::OVERWRITE) === true) {
-                $binaryFullPath = $spcPath . ($os === 'Windows' ? "\\buildroot\\bin\\{$binaryPath}" : "/buildroot/bin/{$binaryPath}");
-                $zip->addFile($binaryFullPath, $binaryPath);
+            if ($zip->open($zipPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) === true) {
+                $zip->addFile(
+                    "{$spcPath}" . ($os === 'Windows' ? "\\buildroot\\bin\\{$bin}" : "/buildroot/bin/{$bin}"),
+                    $bin
+                );
                 $zip->close();
-
-                $this->info("PHP binary has been zipped as {$zipFileName} and placed at {$zipFilePath}");
+                $this->info("Zipped to {$zipPath}");
             } else {
-                $this->error("Failed to create zip file at {$zipFilePath}");
+                $this->error("Failed zip at {$zipPath}");
             }
 
             if ($sapi === 'micro') {
-                $this->info('To create a self-contained executable, use:');
                 if ($os === 'Windows') {
                     $this->info("copy /b {$spcPath}\\buildroot\\bin\\micro.sfx + your-app.php app.exe");
                 } else {
                     $this->info("cat {$spcPath}/buildroot/bin/micro.sfx your-app.php > app && chmod +x app");
                 }
             }
-
             return self::SUCCESS;
-        } else {
-            $this->error('Build failed. Please check the error messages above.');
-            return self::FAILURE;
         }
+
+        $this->error('Build failed.');
+        return self::FAILURE;
     }
 
     protected function checkWindowsRequirements(): void
     {
-        // Check for Visual Studio
-        $vsWhere = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe';
-        if (!file_exists($vsWhere)) {
+        $vs = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe';
+        if (! file_exists($vs)) {
             throw new RuntimeException(
-                "Visual Studio not found. Please install Visual Studio 2022 with:\n" .
-                "- Desktop development with C++\n" .
-                "- Windows 10/11 SDK\n" .
-                "- MSVC v143 VS 2022 C++ x64/x86 build tools\n" .
-                "- Windows Universal CRT SDK"
+                "Install Visual Studio 2022 with C++ workload and SDKs."
             );
         }
-
-        // You can add more Windows-specific requirement checks here
     }
 
     protected function validateEnvironment(): void
     {
         if (version_compare(PHP_VERSION, '8.1.0', '<')) {
-            throw new RuntimeException('PHP >= 8.1 is required to run this command.');
+            throw new RuntimeException('PHP >= 8.1 required.');
         }
-
-        if (!extension_loaded('mbstring')) {
-            throw new RuntimeException('The mbstring extension is required.');
-        }
-
-        if (!extension_loaded('tokenizer')) {
-            throw new RuntimeException('The tokenizer extension is required.');
+        foreach (['mbstring','tokenizer'] as $ext) {
+            if (! extension_loaded($ext)) {
+                throw new RuntimeException("Extension {$ext} required.");
+            }
         }
     }
 }
