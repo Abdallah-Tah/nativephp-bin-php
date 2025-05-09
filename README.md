@@ -56,6 +56,42 @@ Before installing this package, ensure you have the following:
 
    You should see the `php-ext:install` command listed.
 
+## NativePHP Requirement
+
+This package requires [NativePHP](https://nativephp.dev/) to be installed and configured in your Laravel project. NativePHP is a framework for building native desktop applications using Laravel.
+
+### Installing NativePHP
+
+1. **Add NativePHP to Your Project**
+
+   Run the following command to install NativePHP:
+
+   ```bash
+   composer require nativephp/nativephp
+   ```
+
+2. **Publish NativePHP Assets**
+
+   Publish the NativePHP configuration and assets:
+
+   ```bash
+   php artisan nativephp:install
+   ```
+
+3. **Verify Installation**
+
+   Ensure NativePHP is installed correctly by running:
+
+   ```bash
+   php artisan nativephp:serve
+   ```
+
+   This will start the NativePHP development server.
+
+### Using This Package with NativePHP
+
+Once NativePHP is installed, you can use this package to build custom PHP binaries with the required extensions for your NativePHP application. Follow the usage instructions provided above to install and configure the extensions.
+
 ## Usage
 
 1. **Run the Command**
