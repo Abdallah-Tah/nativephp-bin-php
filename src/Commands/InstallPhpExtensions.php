@@ -5,7 +5,6 @@ namespace Amohamed\NativePhpCustomPhp\Commands;
 use Illuminate\Console\Command;
 use Laravel\Prompts\Prompt;
 use Laravel\Prompts\Progress;
-use function Laravel\Prompts\multiselect;
 use Illuminate\Support\Facades\Process;
 use RuntimeException;
 use ZipArchive;
@@ -97,13 +96,23 @@ class InstallPhpExtensions extends Command
         // Download required libraries first
         $this->downloadRequiredLibraries($spcPath);
 
-        $extensions = multiselect(
-            'Which PHP extensions would you like to install?',
-            $this->availableExtensions
-        );
+        $this->info('Available PHP extensions:');
+        foreach ($this->availableExtensions as $index => $extension) {
+            $this->line("[{$index}] {$extension}");
+        }
+
+        $selectedIndexes = $this->ask('Enter the numbers of the extensions you want to install, separated by commas');
+
+        if (empty($selectedIndexes)) {
+            $this->warn('No extensions selected.');
+            return self::SUCCESS;
+        }
+
+        $selectedIndexes = array_map('trim', explode(',', $selectedIndexes));
+        $extensions = array_intersect_key($this->availableExtensions, array_flip($selectedIndexes));
 
         if (empty($extensions)) {
-            $this->warn('No extensions selected.');
+            $this->warn('No valid extensions selected.');
             return self::SUCCESS;
         }
 
