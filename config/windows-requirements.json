@@ -1,0 +1,42 @@
+{
+    "required_tools": {
+        "visual_studio": {
+            "name": "Visual Studio 2019/2022",
+            "min_version": "16.0",
+            "components": [
+                "C++ desktop development",
+                "Windows SDK"
+            ]
+        },
+        "git": {
+            "name": "Git for Windows",
+            "download_url": "https://git-scm.com/download/win"
+        },
+        "php_sdk": {
+            "name": "php-sdk-binary-tools",
+            "download_url": "https://github.com/php/php-sdk-binary-tools.git",
+            "auto_install": true
+        },
+        "perl": {
+            "name": "Strawberry Perl",
+            "download_url": "https://github.com/StrawberryPerl/Perl-Dist-Strawberry/releases/",
+            "auto_install": true,
+            "required_for": [
+                "openssl"
+            ]
+        },
+        "nasm": {
+            "name": "NASM",
+            "download_url": "https://www.nasm.us/pub/nasm/releasebuilds/",
+            "auto_install": true,
+            "required_for": [
+                "openssl"
+            ]
+        }
+    },
+    "system_requirements": {
+        "os": "Windows 10/11",
+        "min_build": "17063",
+        "architecture": "x64"
+    }
+}

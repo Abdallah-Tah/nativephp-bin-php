@@ -69,7 +69,8 @@ class InstallPhpExtensions extends Command
             'libzip'
         ];
 
-        $this->defaultPath = app()->basePath('nativephp-php-custom');
+        // Update default path to use static-php-cli
+        $this->defaultPath = app()->basePath('static-php-cli');
     }
 
     protected function detectOS(): string
@@ -86,27 +87,54 @@ class InstallPhpExtensions extends Command
     {
         $this->validateEnvironment();
 
+        // Get available PHP versions
+        $availableVersions = $this->getAvailablePhpVersions();
+
         // PHP version selection with only stable versions
         $phpVersion = $this->choice(
             'Which PHP version would you like to build?',
-            ['8.2.16', '8.3.5'], // Specific stable versions
-            '8.3.5'
+            $availableVersions,
+            end($availableVersions) // Default to latest version
         );
 
         $spcPath = $this->option('path') ?: $this->defaultPath;
 
         if (!file_exists($spcPath)) {
-            $this->info("nativephp-php-custom not found. Cloning into {$spcPath}...");
-            $result = Process::run("git clone https://github.com/Abdallah-Tah/nativephp-php-custom.git \"{$spcPath}\"");
+            $this->info("static-php-cli not found. Cloning into {$spcPath}...");
+
+            // Clone the official static-php-cli repository
+            $result = Process::run("git clone https://github.com/crazywhalecc/static-php-cli.git \"{$spcPath}\"");
             if (!$result->successful()) {
-                throw new RuntimeException("Failed to clone nativephp-php-custom: " . $result->errorOutput());
+                throw new RuntimeException("Failed to clone static-php-cli: " . $result->errorOutput());
+            }
+
+            // Update composer.json to be compatible with PHP 8.3
+            $composerJsonPath = $spcPath . '/composer.json';
+            if (file_exists($composerJsonPath)) {
+                $composerJson = json_decode(file_get_contents($composerJsonPath), true);
+                if (json_last_error() === JSON_ERROR_NONE) {
+                    $composerJson['require']['php'] = '>=8.1';  // More permissive PHP requirement
+                    file_put_contents($composerJsonPath, json_encode($composerJson, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+                }
             }
 
             // Run composer install in the cloned directory
             $this->info("Installing dependencies in {$spcPath}...");
             $composerResult = Process::path($spcPath)->run('composer install');
             if (!$composerResult->successful()) {
-                throw new RuntimeException("Failed to install dependencies: " . $composerResult->errorOutput());
+                // If composer install fails, try composer update
+                $this->info("Initial install failed, trying composer update...");
+                $composerResult = Process::path($spcPath)->run('composer update');
+                if (!$composerResult->successful()) {
+                    throw new RuntimeException("Failed to install dependencies: " . $composerResult->errorOutput());
+                }
+            }
+
+            // Initialize the static-php-cli configuration
+            $this->info("Initializing static-php-cli configuration...");
+            $initResult = Process::path($spcPath)->run('bin/spc doctor');
+            if (!$initResult->successful()) {
+                throw new RuntimeException("Failed to initialize static-php-cli: " . $initResult->errorOutput());
             }
         }
 
@@ -142,17 +170,66 @@ class InstallPhpExtensions extends Command
         return $this->buildPhp($selected, $os, $spcPath, $phpVersion);
     }
 
+    protected function getAvailablePhpVersions(): array
+    {
+        $versions = [
+            '8.2.16',
+            '8.3.21', // Latest 8.3.x
+            '8.4',  // Latest 8.4.x
+        ];
+
+        // Sort versions from newest to oldest
+        usort($versions, function ($a, $b) {
+            return version_compare($b, $a);
+        });
+
+        return $versions;
+    }
+
+    protected function manualDownloadDependency(string $spcPath, string $lib): bool
+    {
+        $this->info("Attempting manual download of {$lib}...");
+
+        // Use spc.exe from root directory on Windows, bin/spc on Unix
+        $spcBinary = PHP_OS_FAMILY === 'Windows'
+            ? $spcPath . DIRECTORY_SEPARATOR . 'spc.exe'
+            : $spcPath . DIRECTORY_SEPARATOR . 'bin' . DIRECTORY_SEPARATOR . 'spc';
+
+        // Run spc download command directly
+        $downloadCmd = "\"{$spcBinary}\" download {$lib}";
+
+        $this->comment("Running: {$downloadCmd}");
+        $process = Process::path($spcPath)->timeout(300)->run($downloadCmd);
+
+        if ($process->successful()) {
+            $this->info("Successfully downloaded {$lib}");
+            return true;
+        }
+
+        $this->error("Failed to download {$lib}: " . $process->errorOutput());
+        return false;
+    }
+
     protected function downloadRequiredLibraries(string $spcPath): void
     {
         $this->info('Checking and downloading required libraries...');
+
+        // Ensure the downloads directory exists
+        $downloadsPath = $spcPath . DIRECTORY_SEPARATOR . 'downloads';
+        if (!file_exists($downloadsPath)) {
+            mkdir($downloadsPath, 0777, true);
+        }
+
         foreach ($this->requiredLibraries as $lib) {
             $maxRetries = 3;
             $retryCount = 0;
+            $downloaded = false;
 
             do {
                 $this->info("Checking library: {$lib}" . ($retryCount > 0 ? " (Attempt {$retryCount}/{$maxRetries})" : ""));
                 try {
-                    $p = Process::start("{$spcPath}/bin/spc build-library {$lib}");
+                    // First try with build-library to check if it exists
+                    $p = Process::path($spcPath)->start('bin/spc build-library ' . $lib);
                     $needsDownload = false;
 
                     while ($p->running()) {
@@ -168,7 +245,14 @@ class InstallPhpExtensions extends Command
                     }
 
                     if ($needsDownload) {
-                        $this->warn("Library {$lib} not found, downloading...");
+                        // Try manual download first
+                        if ($this->manualDownloadDependency($spcPath, $lib)) {
+                            $downloaded = true;
+                            break;
+                        }
+
+                        // If manual download fails, try the original method
+                        $this->warn("Manual download failed for {$lib}, trying alternative method...");
                         $d = Process::timeout(300)->path($spcPath)->start("bin/spc download {$lib}");
 
                         while ($d->running()) {
@@ -180,27 +264,36 @@ class InstallPhpExtensions extends Command
 
                         $status = $d->wait();
                         if ($status === 0) {
+                            $downloaded = true;
                             $this->info("Successfully downloaded {$lib}");
-                            break; // Success, exit retry loop
-                        } else {
-                            throw new RuntimeException("Failed to download {$lib}: " . $d->errorOutput());
+                            break;
                         }
                     } else {
                         // Library exists or was built successfully
+                        $downloaded = true;
                         break;
                     }
                 } catch (\Exception $e) {
                     $this->error($e->getMessage());
                     if (++$retryCount === $maxRetries) {
-                        if ($this->confirm("Failed to download {$lib} after {$maxRetries} attempts. Continue without it?")) {
+                        if (!$downloaded && !$this->confirm("Failed to download {$lib} after {$maxRetries} attempts. Would you like to try downloading it manually?")) {
+                            throw new RuntimeException("Cannot continue without {$lib}");
+                        }
+                        // Try manual download as last resort
+                        if ($this->manualDownloadDependency($spcPath, $lib)) {
+                            $downloaded = true;
                             break;
                         }
-                        throw new RuntimeException("Cannot continue without {$lib} after {$maxRetries} failed attempts");
+                        throw new RuntimeException("All attempts to download {$lib} have failed");
                     }
                     $this->warn("Retrying download...");
-                    sleep(2); // Wait before retry
+                    sleep(2);
                 }
-            } while ($retryCount < $maxRetries);
+            } while ($retryCount < $maxRetries && !$downloaded);
+
+            if (!$downloaded) {
+                throw new RuntimeException("Failed to download {$lib} after all attempts");
+            }
         }
     }
 
@@ -209,25 +302,37 @@ class InstallPhpExtensions extends Command
         if (PHP_OS_FAMILY === 'Windows') {
             $spcExePath = "{$spcPath}\\spc.exe";
             if (!file_exists($spcExePath)) {
-                $this->info("Downloading spc.exe...");
-                $url = "https://raw.githubusercontent.com/Abdallah-Tah/nativephp-php-custom/main/spc.exe";
+                $this->info("Copying spc.exe to build directory...");
+
+                // Try to find existing spc.exe in known locations
+                $possibleLocations = [
+                    app()->basePath('spc.exe'),
+                    app()->basePath('nativephp-php-custom/spc.exe'),
+                ];
+
+                $sourceSpc = null;
+                foreach ($possibleLocations as $location) {
+                    if (file_exists($location)) {
+                        $sourceSpc = $location;
+                        break;
+                    }
+                }
+
+                if (!$sourceSpc) {
+                    throw new RuntimeException("Could not find spc.exe in any known location. Please ensure spc.exe exists in the project root or nativephp-php-custom directory.");
+                }
 
                 // Create directory if it doesn't exist
                 if (!file_exists($spcPath)) {
                     mkdir($spcPath, 0777, true);
                 }
 
-                // Download the file
-                $content = file_get_contents($url);
-                if ($content === false) {
-                    throw new RuntimeException("Failed to download spc.exe");
+                // Copy the file
+                if (!copy($sourceSpc, $spcExePath)) {
+                    throw new RuntimeException("Failed to copy spc.exe to {$spcExePath}");
                 }
 
-                if (file_put_contents($spcExePath, $content) === false) {
-                    throw new RuntimeException("Failed to save spc.exe");
-                }
-
-                $this->info("Downloaded spc.exe successfully");
+                $this->info("Copied spc.exe successfully");
             }
         }
     }
@@ -242,6 +347,9 @@ class InstallPhpExtensions extends Command
 
         // Set SPC_DOWNLOAD_PATH environment variable to use our custom downloads path
         putenv("SPC_DOWNLOAD_PATH={$downloadsPath}");
+
+        // Check if spc.exe exists and copy if needed
+        $this->ensureSpcBinaryExists($spcPath);
 
         // First ensure we have PHP SDK on Windows
         if ($os === 'Windows') {
@@ -334,10 +442,34 @@ class InstallPhpExtensions extends Command
         return true;
     }
 
+    protected function downloadPhpSource(string $version, string $spcPath): void
+    {
+        $downloadsPath = $spcPath . DIRECTORY_SEPARATOR . 'downloads';
+        $phpArchive = "php-{$version}.tar.xz";
+
+        if (!file_exists($downloadsPath . DIRECTORY_SEPARATOR . $phpArchive)) {
+            $this->info("Downloading PHP {$version}...");
+            $url = "https://www.php.net/distributions/{$phpArchive}";
+
+            if (!file_exists($downloadsPath)) {
+                mkdir($downloadsPath, 0777, true);
+            }
+
+            $result = Process::timeout(300)->run("curl -L {$url} -o \"{$downloadsPath}/{$phpArchive}\"");
+
+            if (!$result->successful()) {
+                throw new RuntimeException("Failed to download PHP source: " . $result->errorOutput());
+            }
+        }
+    }
+
     protected function buildPhp(array $exts, string $os, string $spcPath, string $phpVersion): int
     {
         // Ensure spc binary exists before trying to use it
         $this->ensureSpcBinaryExists($spcPath);
+
+        // Download PHP source if needed
+        $this->downloadPhpSource($phpVersion, $spcPath);
 
         // Set up downloads path
         $downloadsPath = $spcPath . DIRECTORY_SEPARATOR . 'downloads';
@@ -348,9 +480,34 @@ class InstallPhpExtensions extends Command
         putenv("SPC_DOWNLOAD_PATH={$downloadsPath}");
 
         // First download and build all dependencies
-        if (!$this->downloadAndBuildDependencies($exts, $os, $spcPath)) {
-            $this->error("Failed to prepare all required dependencies");
-            return self::FAILURE;
+        try {
+            if (!$this->downloadAndBuildDependencies($exts, $os, $spcPath)) {
+                if ($this->confirm('Would you like to try downloading dependencies manually?')) {
+                    foreach ($this->requiredLibraries as $lib) {
+                        if (!$this->manualDownloadDependency($spcPath, $lib)) {
+                            if (!$this->confirm("Failed to download {$lib}. Continue anyway?")) {
+                                return self::FAILURE;
+                            }
+                        }
+                    }
+                } else {
+                    $this->error("Failed to prepare all required dependencies");
+                    return self::FAILURE;
+                }
+            }
+        } catch (\Exception $e) {
+            $this->error($e->getMessage());
+            if ($this->confirm('Would you like to try downloading dependencies manually?')) {
+                foreach ($this->requiredLibraries as $lib) {
+                    if (!$this->manualDownloadDependency($spcPath, $lib)) {
+                        if (!$this->confirm("Failed to download {$lib}. Continue anyway?")) {
+                            return self::FAILURE;
+                        }
+                    }
+                }
+            } else {
+                return self::FAILURE;
+            }
         }
 
         $list = implode(',', $exts);

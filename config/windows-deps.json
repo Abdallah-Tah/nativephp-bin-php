@@ -1,0 +1,31 @@
+{
+    "strawberry-perl": {
+        "type": "url",
+        "url": "https://strawberryperl.com/download/5.32.1.1/strawberry-perl-5.32.1.1-64bit-portable.zip",
+        "extract": "pkgroot/strawberry-perl-x86_64-win",
+        "version": "5.32.1.1",
+        "checkCommand": "perl -v",
+        "requiredBy": [
+            "openssl"
+        ]
+    },
+    "nasm": {
+        "type": "url",
+        "url": "https://www.nasm.us/pub/nasm/releasebuilds/2.16.01/win64/nasm-2.16.01-win64.zip",
+        "extract": "pkgroot/nasm-x86_64-win",
+        "version": "2.16.01",
+        "checkCommand": "nasm -v",
+        "requiredBy": [
+            "general"
+        ]
+    },
+    "php-sdk": {
+        "type": "git",
+        "url": "https://github.com/php/php-sdk-binary-tools.git",
+        "extract": "php-sdk-binary-tools",
+        "checkCommand": "phpsdk-starter.bat -h",
+        "requiredBy": [
+            "general"
+        ]
+    }
+}
