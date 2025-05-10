@@ -97,10 +97,17 @@ class InstallPhpExtensions extends Command
             end($availableVersions) // Default to latest version
         );
 
+        // Properly format the path for Windows
         $spcPath = $this->option('path') ?: $this->defaultPath;
+        $spcPath = str_replace('/', DIRECTORY_SEPARATOR, $spcPath);
 
         if (!file_exists($spcPath)) {
             $this->info("static-php-cli not found. Cloning into {$spcPath}...");
+
+            // Create directory if it doesn't exist
+            if (!file_exists(dirname($spcPath))) {
+                mkdir(dirname($spcPath), 0777, true);
+            }
 
             // Clone the official static-php-cli repository
             $result = Process::run("git clone https://github.com/crazywhalecc/static-php-cli.git \"{$spcPath}\"");
@@ -109,13 +116,18 @@ class InstallPhpExtensions extends Command
             }
 
             // Update composer.json to be compatible with PHP 8.3
-            $composerJsonPath = $spcPath . '/composer.json';
+            $composerJsonPath = $spcPath . DIRECTORY_SEPARATOR . 'composer.json';
             if (file_exists($composerJsonPath)) {
                 $composerJson = json_decode(file_get_contents($composerJsonPath), true);
                 if (json_last_error() === JSON_ERROR_NONE) {
                     $composerJson['require']['php'] = '>=8.1';  // More permissive PHP requirement
                     file_put_contents($composerJsonPath, json_encode($composerJson, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
                 }
+            }
+
+            // Ensure the path exists and is properly formatted before running composer
+            if (!file_exists($spcPath)) {
+                throw new RuntimeException("Failed to create directory: {$spcPath}");
             }
 
             // Run composer install in the cloned directory
@@ -463,6 +475,69 @@ class InstallPhpExtensions extends Command
         }
     }
 
+    protected function extractPhpSource(string $phpArchive, string $targetDir): bool
+    {
+        if (PHP_OS_FAMILY === 'Windows') {
+            // Try to find 7-Zip
+            $sevenZipPaths = [
+                'C:\\Program Files\\7-Zip\\7z.exe',
+                'C:\\Program Files (x86)\\7-Zip\\7z.exe'
+            ];
+
+            $sevenZipExe = null;
+            foreach ($sevenZipPaths as $path) {
+                if (file_exists($path)) {
+                    $sevenZipExe = $path;
+                    break;
+                }
+            }
+
+            if (!$sevenZipExe) {
+                $this->warn('7-Zip not found. Installing via winget...');
+                Process::run('winget install -e --id 7zip.7zip');
+
+                // Check again after install
+                foreach ($sevenZipPaths as $path) {
+                    if (file_exists($path)) {
+                        $sevenZipExe = $path;
+                        break;
+                    }
+                }
+
+                if (!$sevenZipExe) {
+                    throw new RuntimeException('Failed to find or install 7-Zip. Please install it manually.');
+                }
+            }
+
+            // Extract using 7-Zip
+            $this->info('Extracting with 7-Zip...');
+
+            // First extract .tar.xz to .tar
+            $tarFile = str_replace('.tar.xz', '.tar', $phpArchive);
+            $extractXz = Process::run("\"{$sevenZipExe}\" x \"{$phpArchive}\" -o\"" . dirname($phpArchive) . "\" -y");
+
+            if (!$extractXz->successful()) {
+                throw new RuntimeException("Failed to extract .xz: " . $extractXz->errorOutput());
+            }
+
+            // Then extract .tar
+            $extractTar = Process::run("\"{$sevenZipExe}\" x \"{$tarFile}\" -o\"{$targetDir}\" -y");
+
+            if (!$extractTar->successful()) {
+                throw new RuntimeException("Failed to extract .tar: " . $extractTar->errorOutput());
+            }
+
+            // Clean up .tar file
+            @unlink($tarFile);
+
+            return true;
+        } else {
+            // Use tar on Unix systems
+            $extractResult = Process::run("tar -xf \"{$phpArchive}\" -C \"{$targetDir}\"");
+            return $extractResult->successful();
+        }
+    }
+
     protected function buildPhp(array $exts, string $os, string $spcPath, string $phpVersion): int
     {
         // Ensure spc binary exists before trying to use it
@@ -479,56 +554,95 @@ class InstallPhpExtensions extends Command
 
         putenv("SPC_DOWNLOAD_PATH={$downloadsPath}");
 
-        // First download and build all dependencies
-        try {
-            if (!$this->downloadAndBuildDependencies($exts, $os, $spcPath)) {
-                if ($this->confirm('Would you like to try downloading dependencies manually?')) {
-                    foreach ($this->requiredLibraries as $lib) {
-                        if (!$this->manualDownloadDependency($spcPath, $lib)) {
-                            if (!$this->confirm("Failed to download {$lib}. Continue anyway?")) {
-                                return self::FAILURE;
-                            }
-                        }
-                    }
-                } else {
-                    $this->error("Failed to prepare all required dependencies");
-                    return self::FAILURE;
-                }
+        // Set up VS environment
+        if ($os === 'Windows') {
+            $this->info("Setting up Visual Studio environment...");
+
+            // Set required environment variables
+            putenv("VS_BUILDTOOLS=C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools");
+            putenv("PHP_SDK_VS=vs17");
+            putenv("PHP_SDK_ARCH=x64");
+
+            // Initialize VS environment
+            $vsPath = "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools";
+            if (!file_exists($vsPath)) {
+                $vsPath = "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community";
             }
-        } catch (\Exception $e) {
-            $this->error($e->getMessage());
-            if ($this->confirm('Would you like to try downloading dependencies manually?')) {
-                foreach ($this->requiredLibraries as $lib) {
-                    if (!$this->manualDownloadDependency($spcPath, $lib)) {
-                        if (!$this->confirm("Failed to download {$lib}. Continue anyway?")) {
-                            return self::FAILURE;
-                        }
-                    }
-                }
-            } else {
-                return self::FAILURE;
+
+            if (!file_exists($vsPath)) {
+                throw new RuntimeException("Visual Studio 2022 with C++ workload is required");
+            }
+
+            // Run vcvars64.bat to set up environment
+            $vcvarsPath = "{$vsPath}\\VC\\Auxiliary\\Build\\vcvars64.bat";
+            if (file_exists($vcvarsPath)) {
+                $this->info("Initializing Visual Studio environment...");
+                Process::run("call \"{$vcvarsPath}\"");
             }
         }
 
+        // Extract PHP source
+        $phpSourcePath = $spcPath . DIRECTORY_SEPARATOR . 'source' . DIRECTORY_SEPARATOR . 'php-src';
+        if (!file_exists($phpSourcePath)) {
+            $this->info("Extracting PHP source...");
+            $phpArchive = $downloadsPath . DIRECTORY_SEPARATOR . "php-{$phpVersion}.tar.xz";
+
+            if (!file_exists($phpArchive)) {
+                throw new RuntimeException("PHP source archive not found at {$phpArchive}");
+            }
+
+            // Create source directory
+            if (!file_exists(dirname($phpSourcePath))) {
+                mkdir(dirname($phpSourcePath), 0777, true);
+            }
+
+            if (!$this->extractPhpSource($phpArchive, dirname($phpSourcePath))) {
+                throw new RuntimeException("Failed to extract PHP source");
+            }
+        }
+
+        // Build process
         $list = implode(',', $exts);
         $sapi = $this->option('sapi');
 
         $this->info("Building PHP with: {$list}...");
+
+        // Configure build command with debug flags
         $buildCmd = ($os === 'Windows' ? "{$spcPath}\\spc.exe" : "{$spcPath}/bin/spc")
-            . " build \"{$list}\" --build-{$sapi}"
+            . " build \"{$list}\" --build-cli"
+            . " --with-clean" // Clean build directory
+            . " --verbose"    // Add verbose output
+            . " --debug"      // Add debug information
             . ($this->option('upx') ? ' --with-upx-pack' : '');
 
         $this->comment("Running: {$buildCmd}");
 
         try {
-            $process = Process::timeout(3600)->start($buildCmd); // 1 hour timeout for build
+            // Create a log file for build output
+            $logFile = $spcPath . DIRECTORY_SEPARATOR . 'build.log';
+            $this->info("Build output will be logged to: {$logFile}");
 
+            $process = Process::timeout(3600) // 1 hour timeout
+                ->env([
+                    'PATH' => getenv('PATH'),
+                    'TEMP' => getenv('TEMP'),
+                    'TMP' => getenv('TMP'),
+                    'VS_BUILDTOOLS' => getenv('VS_BUILDTOOLS'),
+                    'PHP_SDK_VS' => getenv('PHP_SDK_VS'),
+                    'PHP_SDK_ARCH' => getenv('PHP_SDK_ARCH'),
+                    'SPC_DOWNLOAD_PATH' => getenv('SPC_DOWNLOAD_PATH')
+                ])
+                ->start($buildCmd);
+
+            // Stream output to both console and log file
             while ($process->running()) {
                 if ($output = $process->output()) {
                     $this->line($output);
+                    file_put_contents($logFile, $output, FILE_APPEND);
                 }
                 if ($error = $process->errorOutput()) {
                     $this->error($error);
+                    file_put_contents($logFile, "[ERROR] " . $error, FILE_APPEND);
                 }
                 sleep(1);
             }
@@ -538,19 +652,19 @@ class InstallPhpExtensions extends Command
             if ($result === 0) {
                 $bin = $sapi === 'micro' ? 'micro.sfx' : ($os === 'Windows' ? 'php.exe' : 'php');
                 $this->info('Build successful!');
-                $this->info("Binary at: {$spcPath}" . ($os === 'Windows' ? "\\buildroot\\bin\\{$bin}" : "/buildroot/bin/{$bin}"));
+                $binPath = "{$spcPath}/buildroot/bin/{$bin}";
+                $this->info("Binary at: {$binPath}");
 
+                // Create zip file
                 $zipName = "php-{$phpVersion}.zip";
                 $zipPath = "vendor/nativephp/php-bin/bin/{$os}/x64/{$zipName}";
 
-                // Ensure directory exists
                 if (!file_exists(dirname($zipPath))) {
                     mkdir(dirname($zipPath), 0777, true);
                 }
 
                 $zip = new ZipArchive();
                 if ($zip->open($zipPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) === true) {
-                    $binPath = "{$spcPath}" . ($os === 'Windows' ? "\\buildroot\\bin\\{$bin}" : "/buildroot/bin/{$bin}");
                     if (file_exists($binPath)) {
                         $zip->addFile($binPath, $bin);
                         $zip->close();
@@ -564,17 +678,10 @@ class InstallPhpExtensions extends Command
                     return self::FAILURE;
                 }
 
-                if ($sapi === 'micro') {
-                    if ($os === 'Windows') {
-                        $this->info("copy /b {$spcPath}\\buildroot\\bin\\micro.sfx + your-app.php app.exe");
-                    } else {
-                        $this->info("cat {$spcPath}/buildroot/bin/micro.sfx your-app.php > app && chmod +x app");
-                    }
-                }
                 return self::SUCCESS;
             }
 
-            $this->error('Build failed with output:');
+            $this->error('Build failed! Check build.log for details');
             $this->error($process->errorOutput());
             return self::FAILURE;
 
