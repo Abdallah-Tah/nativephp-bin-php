@@ -234,6 +234,15 @@ class InstallPhpExtensions extends Command
 
     protected function downloadAndBuildDependencies(array $exts, string $os, string $spcPath): bool
     {
+        // Create downloads directory in the spcPath if it doesn't exist
+        $downloadsPath = $spcPath . DIRECTORY_SEPARATOR . 'downloads';
+        if (!file_exists($downloadsPath)) {
+            mkdir($downloadsPath, 0777, true);
+        }
+
+        // Set SPC_DOWNLOAD_PATH environment variable to use our custom downloads path
+        putenv("SPC_DOWNLOAD_PATH={$downloadsPath}");
+
         // First ensure we have PHP SDK on Windows
         if ($os === 'Windows') {
             if (!file_exists('php-sdk-binary-tools')) {
@@ -264,15 +273,17 @@ class InstallPhpExtensions extends Command
                 . " download {$dep}";
 
             $this->comment("Running: {$downloadCmd}");
-            $downloadProcess = Process::start($downloadCmd);
-            while ($downloadProcess->running()) {
-                if ($output = $downloadProcess->output()) {
+            $process = Process::start($downloadCmd);
+            putenv("SPC_DOWNLOAD_PATH={$downloadsPath}");
+
+            while ($process->running()) {
+                if ($output = $process->output()) {
                     $this->line($output);
                 }
                 sleep(1);
             }
 
-            if ($downloadProcess->wait() !== 0) {
+            if ($process->wait() !== 0) {
                 $this->error("Failed to download {$dep}");
                 return false;
             }
@@ -283,6 +294,7 @@ class InstallPhpExtensions extends Command
 
             $this->comment("Running: {$extractCmd}");
             $extractProcess = Process::start($extractCmd);
+
             while ($extractProcess->running()) {
                 if ($output = $extractProcess->output()) {
                     $this->line($output);
@@ -326,6 +338,14 @@ class InstallPhpExtensions extends Command
     {
         // Ensure spc binary exists before trying to use it
         $this->ensureSpcBinaryExists($spcPath);
+
+        // Set up downloads path
+        $downloadsPath = $spcPath . DIRECTORY_SEPARATOR . 'downloads';
+        if (!file_exists($downloadsPath)) {
+            mkdir($downloadsPath, 0777, true);
+        }
+
+        putenv("SPC_DOWNLOAD_PATH={$downloadsPath}");
 
         // First download and build all dependencies
         if (!$this->downloadAndBuildDependencies($exts, $os, $spcPath)) {
